@@ -12,12 +12,16 @@ const messageRoutes = require('./routes/messages');
 const storyRoutes = require('./routes/stories');
 const reportRoutes = require('./routes/reports');
 const mediaRoutes = require('./routes/media');
+const sparkRoutes = require('./routes/spark');
+const bondRoutes = require('./routes/bond');
 
 const app = express();
 
+app.set('trust proxy', 1);
+
 app.use(helmet());
 app.use(cors({
- origin: [
+  origin: [
     'http://localhost:5173',
     'https://zap-chat-frontend-phi.vercel.app',
     process.env.FRONTEND_URL,
@@ -53,6 +57,8 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/stories', storyRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/media', mediaRoutes);
+app.use('/api/spark', sparkRoutes);
+app.use('/api/bond', bondRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
