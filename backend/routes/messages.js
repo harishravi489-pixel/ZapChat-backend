@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../supabase');
 const authenticate = require('../middleware/authenticate');
+const { sendNotificationToUser } = require('./notifications');
 
 // ─── GET my conversations ─────────────────────────────────
 router.get('/conversations', authenticate, async (req, res) => {
@@ -84,6 +85,22 @@ router.post('/', authenticate, async (req, res) => {
   if (error) return res.status(400).json({ error: error.message });
   res.status(201).json(data);
 });
+
+// Send push notification to recipient
+    try {
+      const senderName = req.user.display_name || req.user.username
+      const notifBody = data.text
+        ? data.text.substring(0, 100)
+        : data.media_type === 'audio'
+        ? '🎤 Sent a voice message'
+        : '📎 Sent a media file'
+      await sendNotificationToUser(recipient_id, `${senderName}`, notifBody, {
+        type: 'message',
+        sender_id: req.user.id,
+      })
+    } catch {}
+
+    res.status(201).json(data);
 
 // ─── OPEN view-once message (marks it as opened + deletes media) ──
 router.post('/:messageId/open', authenticate, async (req, res) => {

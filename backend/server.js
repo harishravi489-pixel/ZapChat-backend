@@ -14,6 +14,7 @@ const reportRoutes = require('./routes/reports');
 const mediaRoutes = require('./routes/media');
 const sparkRoutes = require('./routes/spark');
 const bondRoutes = require('./routes/bond');
+const notificationRoutes = require('./routes/notifications');
 
 const app = express();
 
@@ -59,6 +60,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/spark', sparkRoutes);
 app.use('/api/bond', bondRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
