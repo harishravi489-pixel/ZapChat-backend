@@ -2,21 +2,16 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../supabase');
 const authenticate = require('../middleware/authenticate');
-const admin = require('firebase-admin');
 
-// ─── SAVE push token ──────────────────────────────────────
 router.post('/token', authenticate, async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: 'Token required' });
-
   await supabase
     .from('push_tokens')
     .upsert({ user_id: req.user.id, token }, { onConflict: 'user_id,token' });
-
   res.json({ message: 'Token saved' });
 });
 
-// ─── Helper: send notification ────────────────────────────
 async function sendNotificationToUser(userId, title, body, data = {}) {
   try {
     const { data: tokens } = await supabase
@@ -26,29 +21,24 @@ async function sendNotificationToUser(userId, title, body, data = {}) {
 
     if (!tokens || tokens.length === 0) return;
 
-    const messaging = admin.messaging();
+    const serverKey = process.env.FCM_SERVER_KEY;
+    if (!serverKey) return;
 
     const promises = tokens.map(({ token }) =>
-      messaging.send({
-        token,
-        notification: { title, body },
-        data: Object.fromEntries(
-          Object.entries(data).map(([k, v]) => [k, String(v)])
-        ),
-        webpush: {
-          notification: {
-            title,
-            body,
-            icon: 'https://zap-chat-frontend-phi.vercel.app/icon.png',
-          },
+      fetch('https://fcm.googleapis.com/fcm/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `key=${serverKey}`,
         },
-      }).catch(err => {
-        // Remove invalid tokens
-        if (err.code === 'messaging/invalid-registration-token' ||
-            err.code === 'messaging/registration-token-not-registered') {
-          supabase.from('push_tokens').delete().eq('token', token);
-        }
-      })
+        body: JSON.stringify({
+          to: token,
+          notification: { title, body },
+          data: Object.fromEntries(
+            Object.entries(data).map(([k, v]) => [k, String(v)])
+          ),
+        }),
+      }).catch(() => {})
     );
 
     await Promise.allSettled(promises);

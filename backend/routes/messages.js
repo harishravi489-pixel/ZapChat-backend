@@ -2,9 +2,12 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../supabase');
 const authenticate = require('../middleware/authenticate');
-const { sendNotificationToUser } = require('./notifications');
 
-// ─── GET my conversations ─────────────────────────────────
+let sendNotificationToUser;
+try {
+  sendNotificationToUser = require('./notifications').sendNotificationToUser;
+} catch {}
+
 router.get('/conversations', authenticate, async (req, res) => {
   const { data, error } = await supabase
     .from('messages')
@@ -18,7 +21,6 @@ router.get('/conversations', authenticate, async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  // Group by conversation partner
   const convMap = new Map();
   data.forEach(msg => {
     const partner = msg.sender.id === req.user.id ? msg.recipient : msg.sender;
@@ -33,7 +35,6 @@ router.get('/conversations', authenticate, async (req, res) => {
   res.json([...convMap.values()]);
 });
 
-// ─── GET messages with a user ─────────────────────────────
 router.get('/:userId', authenticate, async (req, res) => {
   const page = parseInt(req.query.page) || 0;
   const limit = 30;
@@ -41,17 +42,14 @@ router.get('/:userId', authenticate, async (req, res) => {
   const { data } = await supabase
     .from('messages')
     .select(`
-      id, created_at, text, media_url, media_type, media_thumbnail, 
+      id, created_at, text, media_url, media_type, media_thumbnail,
       is_view_once, is_opened, is_deleted, read_at,
       sender_id, recipient_id
     `)
-    .or(
-      `and(sender_id.eq.${req.user.id},recipient_id.eq.${req.params.userId}),and(sender_id.eq.${req.params.userId},recipient_id.eq.${req.user.id})`
-    )
+    .or(`and(sender_id.eq.${req.user.id},recipient_id.eq.${req.params.userId}),and(sender_id.eq.${req.params.userId},recipient_id.eq.${req.user.id})`)
     .order('created_at', { ascending: false })
     .range(page * limit, (page + 1) * limit - 1);
 
-  // Mark messages to me as read
   await supabase
     .from('messages')
     .update({ read_at: new Date().toISOString() })
@@ -62,7 +60,6 @@ router.get('/:userId', authenticate, async (req, res) => {
   res.json((data || []).reverse());
 });
 
-// ─── SEND message ─────────────────────────────────────────
 router.post('/', authenticate, async (req, res) => {
   const { recipient_id, text, media_url, media_type, media_thumbnail, is_view_once } = req.body;
   if (!recipient_id) return res.status(400).json({ error: 'recipient_id required' });
@@ -83,26 +80,26 @@ router.post('/', authenticate, async (req, res) => {
     .single();
 
   if (error) return res.status(400).json({ error: error.message });
-  res.status(201).json(data);
-});
 
-// Send push notification to recipient
-    try {
-      const senderName = req.user.display_name || req.user.username
+  // Send push notification
+  try {
+    if (sendNotificationToUser) {
+      const senderName = req.user.display_name || req.user.username;
       const notifBody = data.text
         ? data.text.substring(0, 100)
         : data.media_type === 'audio'
         ? '🎤 Sent a voice message'
-        : '📎 Sent a media file'
-      await sendNotificationToUser(recipient_id, `${senderName}`, notifBody, {
+        : '📎 Sent a media file';
+      await sendNotificationToUser(recipient_id, senderName, notifBody, {
         type: 'message',
         sender_id: req.user.id,
-      })
-    } catch {}
+      });
+    }
+  } catch {}
 
-    res.status(201).json(data);
+  res.status(201).json(data);
+});
 
-// ─── OPEN view-once message (marks it as opened + deletes media) ──
 router.post('/:messageId/open', authenticate, async (req, res) => {
   const { data: msg } = await supabase
     .from('messages')
@@ -115,17 +112,14 @@ router.post('/:messageId/open', authenticate, async (req, res) => {
   if (!msg) return res.status(404).json({ error: 'Message not found' });
   if (msg.is_opened) return res.status(400).json({ error: 'Already opened' });
 
-  // Mark as opened — media_url cleared so it's gone after viewing
   await supabase
     .from('messages')
     .update({ is_opened: true, media_url: null, opened_at: new Date().toISOString() })
     .eq('id', req.params.messageId);
 
-  // Return the media URL ONE time before wiping it
   res.json({ media_url: msg.media_url, media_type: msg.media_type });
 });
 
-// ─── DELETE message for me (not for both — add that later) ─
 router.delete('/:messageId', authenticate, async (req, res) => {
   const { error } = await supabase
     .from('messages')
