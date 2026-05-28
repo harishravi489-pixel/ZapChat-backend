@@ -4,7 +4,6 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
-
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const postRoutes = require('./routes/posts');
@@ -15,11 +14,10 @@ const mediaRoutes = require('./routes/media');
 const sparkRoutes = require('./routes/spark');
 const bondRoutes = require('./routes/bond');
 const notificationRoutes = require('./routes/notifications');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
-
 app.set('trust proxy', 1);
-
 app.use(helmet());
 app.use(cors({
   origin: [
@@ -37,7 +35,6 @@ const limiter = rateLimit({
   max: 100,
   message: { error: 'Too many requests, please try again later.' },
 });
-
 const authLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 200,
@@ -61,6 +58,7 @@ app.use('/api/media', mediaRoutes);
 app.use('/api/spark', sparkRoutes);
 app.use('/api/bond', bondRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
