@@ -6,15 +6,26 @@ const twilio = require('twilio');
 const admin = require('firebase-admin');
 const supabase = require('../supabase');
 
-// Initialize Firebase Admin once
+// Initialize Firebase Admin using environment variables (no JSON file needed)
 if (!admin.apps.length) {
   try {
-    const serviceAccount = require(process.env.FIREBASE_SERVICE_ACCOUNT_PATH);
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+
+    if (privateKey && clientEmail && projectId) {
+      admin.initializeApp({
+        credential: admin.credential.cert({ privateKey, clientEmail, projectId }),
+      });
+      console.log('Firebase Admin initialized successfully');
+    } else {
+      console.warn('Firebase Admin: missing env vars (FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL, FIREBASE_PROJECT_ID)');
+    }
   } catch (err) {
-    console.warn('Firebase service account not loaded:', err.message);
+    console.warn('Firebase Admin init failed:', err.message);
   }
 }
+
 // Initialize Twilio Verify
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
@@ -24,9 +35,8 @@ function signToken(userId) {
 }
 
 // ─── SEND OTP to phone ────────────────────────────────────
-// POST /api/auth/send-phone-otp
 router.post('/send-phone-otp', async (req, res) => {
-  const { phone } = req.body; // e.g. "+971501234567"
+  const { phone } = req.body;
   if (!phone) return res.status(400).json({ error: 'Phone number required' });
 
   try {
@@ -42,7 +52,6 @@ router.post('/send-phone-otp', async (req, res) => {
 });
 
 // ─── VERIFY phone OTP ─────────────────────────────────────
-// POST /api/auth/verify-phone-otp
 router.post('/verify-phone-otp', async (req, res) => {
   const { phone, code } = req.body;
   if (!phone || !code) return res.status(400).json({ error: 'Phone and code required' });
@@ -62,8 +71,7 @@ router.post('/verify-phone-otp', async (req, res) => {
   }
 });
 
-// ─── GOOGLE sign-in (verify Firebase ID token) ────────────
-// POST /api/auth/google
+// ─── GOOGLE sign-in ────────────────────────────────────────
 router.post('/google', async (req, res) => {
   const { idToken } = req.body;
   if (!idToken) return res.status(400).json({ error: 'idToken required' });
@@ -72,7 +80,6 @@ router.post('/google', async (req, res) => {
     const decoded = await admin.auth().verifyIdToken(idToken);
     const { uid, email, name, picture } = decoded;
 
-    // Upsert user in Supabase
     const { data: user, error } = await supabase
       .from('users')
       .upsert({ firebase_uid: uid, email, display_name: name, avatar_url: picture },
@@ -88,8 +95,7 @@ router.post('/google', async (req, res) => {
   }
 });
 
-// ─── SIGN UP (email + phone, after both OTPs verified) ────
-// POST /api/auth/signup
+// ─── SIGN UP ───────────────────────────────────────────────
 router.post('/signup', async (req, res) => {
   const { email, phone, username, password, display_name } = req.body;
   if (!email || !phone || !username || !password) {
@@ -97,7 +103,6 @@ router.post('/signup', async (req, res) => {
   }
 
   try {
-    // Check username availability
     const { data: existing } = await supabase
       .from('users')
       .select('id')
@@ -133,10 +138,9 @@ router.post('/signup', async (req, res) => {
   }
 });
 
-// ─── LOG IN ───────────────────────────────────────────────
-// POST /api/auth/login
+// ─── LOG IN ────────────────────────────────────────────────
 router.post('/login', async (req, res) => {
-  const { identifier, password } = req.body; // identifier = username or email
+  const { identifier, password } = req.body;
   if (!identifier || !password) return res.status(400).json({ error: 'Credentials required' });
 
   try {
@@ -151,7 +155,6 @@ router.post('/login', async (req, res) => {
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
 
-    // Check if banned
     const { data: ban } = await supabase
       .from('bans')
       .select('*')
@@ -169,8 +172,7 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// ─── CHECK USERNAME availability ─────────────────────────
-// GET /api/auth/check-username/:username
+// ─── CHECK USERNAME ────────────────────────────────────────
 router.get('/check-username/:username', async (req, res) => {
   const { data } = await supabase
     .from('users')
