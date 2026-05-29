@@ -7,7 +7,7 @@ const authenticate = require('../middleware/authenticate');
 router.get('/me', authenticate, async (req, res) => {
   const { data } = await supabase
     .from('users')
-    .select('id, username, display_name, email, phone, bio, avatar_url, pinned_song, is_private, strike_count, created_at')
+    .select('id, username, display_name, email, phone, bio, avatar_url, pinned_song, is_private, strike_count, role, created_at')
     .eq('id', req.user.id)
     .single();
   res.json(data);
