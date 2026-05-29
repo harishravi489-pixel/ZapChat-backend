@@ -16,7 +16,7 @@ const adminAuth = async (req, res, next) => {
     const { data: user, error } = await supabase
       .from('users')
       .select('id, role')
-      .eq('id', decoded.userId)
+      .eq('id', decoded.sub)
       .single();
 
     if (error || !user || user.role !== 'admin') {
@@ -238,7 +238,6 @@ router.delete('/users/:id', adminAuth, async (req, res) => {
     const { id } = req.params;
     const { reason } = req.body;
 
-    // Log before deleting
     await supabase.from('admin_actions').insert({
       admin_id: req.adminId,
       target_user_id: id,
@@ -246,7 +245,6 @@ router.delete('/users/:id', adminAuth, async (req, res) => {
       reason,
     });
 
-    // Cascaded deletes should be set up in Supabase via FK constraints
     await supabase.from('users').delete().eq('id', id);
 
     res.json({ success: true });
@@ -292,7 +290,7 @@ router.get('/reports', adminAuth, async (req, res) => {
 router.patch('/reports/:id', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, admin_note, action } = req.body; // action: 'warn' | 'strike' | 'ban' | 'delete_content' | 'dismiss'
+    const { status, admin_note, action } = req.body;
 
     await supabase.from('reports').update({
       status,
