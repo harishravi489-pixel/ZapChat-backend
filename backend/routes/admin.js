@@ -31,22 +31,19 @@ const adminAuth = async (req, res, next) => {
 };
 
 // ─── DASHBOARD STATS ────────────────────────────────────────────────────────
-
-// GET /api/admin/stats
 router.get('/stats', adminAuth, async (req, res) => {
   try {
     const [users, posts, reports, bans] = await Promise.all([
-      supabase.from('users').select('id, created_at', { count: 'exact' }),
-      supabase.from('posts').select('id', { count: 'exact' }),
+      supabase.from('users').select('id', { count: 'exact', head: true }),
+      supabase.from('posts').select('id', { count: 'exact', head: true }),
       supabase.from('reports').select('id, status', { count: 'exact' }),
-      supabase.from('user_bans').select('id', { count: 'exact' }).eq('active', true),
+      supabase.from('user_bans').select('id', { count: 'exact', head: true }).eq('active', true),
     ]);
 
-    // New users last 7 days
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { count: newUsersWeek } = await supabase
       .from('users')
-      .select('id', { count: 'exact' })
+      .select('id', { count: 'exact', head: true })
       .gte('created_at', sevenDaysAgo);
 
     const pendingReports = reports.data?.filter(r => r.status === 'pending').length || 0;
@@ -65,8 +62,6 @@ router.get('/stats', adminAuth, async (req, res) => {
 });
 
 // ─── USER MANAGEMENT ────────────────────────────────────────────────────────
-
-// GET /api/admin/users?page=1&search=&filter=all
 router.get('/users', adminAuth, async (req, res) => {
   try {
     const { page = 1, search = '', filter = 'all' } = req.query;
@@ -75,12 +70,12 @@ router.get('/users', adminAuth, async (req, res) => {
 
     let query = supabase
       .from('users')
-      .select('id, username, email, full_name, avatar_url, role, is_private, created_at, strike_count', { count: 'exact' })
+      .select('id, username, email, display_name, avatar_url, role, is_private, created_at, strike_count', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
     if (search) {
-      query = query.or(`username.ilike.%${search}%,email.ilike.%${search}%,full_name.ilike.%${search}%`);
+      query = query.or(`username.ilike.%${search}%,email.ilike.%${search}%,display_name.ilike.%${search}%`);
     }
 
     if (filter === 'banned') {
@@ -97,7 +92,6 @@ router.get('/users', adminAuth, async (req, res) => {
     const { data, count, error } = await query;
     if (error) throw error;
 
-    // Fetch ban status for each user
     const userIds = data.map(u => u.id);
     const { data: bans } = await supabase
       .from('user_bans')
@@ -108,10 +102,7 @@ router.get('/users', adminAuth, async (req, res) => {
     const banMap = {};
     bans?.forEach(b => { banMap[b.user_id] = b; });
 
-    const enriched = data.map(u => ({
-      ...u,
-      ban: banMap[u.id] || null,
-    }));
+    const enriched = data.map(u => ({ ...u, ban: banMap[u.id] || null }));
 
     res.json({ users: enriched, total: count, page: Number(page), limit });
   } catch (err) {
@@ -119,15 +110,14 @@ router.get('/users', adminAuth, async (req, res) => {
   }
 });
 
-// GET /api/admin/users/:id — full user detail
 router.get('/users/:id', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
     const [userRes, postsRes, reportsRes, banRes] = await Promise.all([
-      supabase.from('users').select('*').eq('id', id).single(),
-      supabase.from('posts').select('id, content, created_at, likes_count, media_url').eq('user_id', id).order('created_at', { ascending: false }).limit(10),
-      supabase.from('reports').select('id, reason, status, created_at, reporter_id').or(`reported_user_id.eq.${id},reported_post_id.in.(select id from posts where user_id = '${id}')`).order('created_at', { ascending: false }),
+      supabase.from('users').select('id, username, email, display_name, avatar_url, role, is_private, created_at, strike_count, bio').eq('id', id).single(),
+      supabase.from('posts').select('id, content, created_at, media_url').eq('user_id', id).order('created_at', { ascending: false }).limit(10),
+      supabase.from('reports').select('id, reason, status, created_at, reporter_id').eq('reported_user_id', id).order('created_at', { ascending: false }),
       supabase.from('user_bans').select('*').eq('user_id', id).eq('active', true).maybeSingle(),
     ]);
 
@@ -144,13 +134,12 @@ router.get('/users/:id', adminAuth, async (req, res) => {
   }
 });
 
-// POST /api/admin/users/:id/strike
 router.post('/users/:id/strike', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
 
-    const { data: user } = await supabase.from('users').select('strike_count, username').eq('id', id).single();
+    const { data: user } = await supabase.from('users').select('strike_count').eq('id', id).single();
     const newCount = (user.strike_count || 0) + 1;
 
     await supabase.from('users').update({ strike_count: newCount }).eq('id', id);
@@ -163,7 +152,6 @@ router.post('/users/:id/strike', adminAuth, async (req, res) => {
       metadata: { strike_number: newCount },
     });
 
-    // Auto-ban at 3 strikes
     if (newCount >= 3) {
       await supabase.from('user_bans').upsert({
         user_id: id,
@@ -181,29 +169,20 @@ router.post('/users/:id/strike', adminAuth, async (req, res) => {
   }
 });
 
-// POST /api/admin/users/:id/ban
 router.post('/users/:id/ban', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { reason, permanent = false, days = 7 } = req.body;
-
     const bannedUntil = permanent ? null : new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 
     await supabase.from('user_bans').upsert({
-      user_id: id,
-      reason,
-      permanent,
-      banned_until: bannedUntil,
-      active: true,
-      banned_by: req.adminId,
+      user_id: id, reason, permanent,
+      banned_until: bannedUntil, active: true, banned_by: req.adminId,
     }, { onConflict: 'user_id' });
 
     await supabase.from('admin_actions').insert({
-      admin_id: req.adminId,
-      target_user_id: id,
-      action_type: 'ban',
-      reason,
-      metadata: { permanent, days },
+      admin_id: req.adminId, target_user_id: id,
+      action_type: 'ban', reason, metadata: { permanent, days },
     });
 
     res.json({ success: true });
@@ -212,41 +191,29 @@ router.post('/users/:id/ban', adminAuth, async (req, res) => {
   }
 });
 
-// POST /api/admin/users/:id/unban
 router.post('/users/:id/unban', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
-
     await supabase.from('user_bans').update({ active: false }).eq('user_id', id);
-
     await supabase.from('admin_actions').insert({
-      admin_id: req.adminId,
-      target_user_id: id,
-      action_type: 'unban',
-      reason: 'Manual unban by admin',
+      admin_id: req.adminId, target_user_id: id,
+      action_type: 'unban', reason: 'Manual unban by admin',
     });
-
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// DELETE /api/admin/users/:id — delete user account
 router.delete('/users/:id', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
-
     await supabase.from('admin_actions').insert({
-      admin_id: req.adminId,
-      target_user_id: id,
-      action_type: 'delete_account',
-      reason,
+      admin_id: req.adminId, target_user_id: id,
+      action_type: 'delete_account', reason,
     });
-
     await supabase.from('users').delete().eq('id', id);
-
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -254,28 +221,23 @@ router.delete('/users/:id', adminAuth, async (req, res) => {
 });
 
 // ─── REPORTS QUEUE ───────────────────────────────────────────────────────────
-
-// GET /api/admin/reports?status=pending&type=all&page=1
 router.get('/reports', adminAuth, async (req, res) => {
   try {
-    const { status = 'pending', type = 'all', page = 1 } = req.query;
+    const { status = 'pending', page = 1 } = req.query;
     const limit = 20;
     const offset = (page - 1) * limit;
 
     let query = supabase
       .from('reports')
       .select(`
-        id, reason, status, created_at, report_type,
+        id, reason, description, status, created_at, content_type, content_id,
         reporter:reporter_id(id, username, avatar_url),
-        reported_user:reported_user_id(id, username, avatar_url),
-        reported_post:reported_post_id(id, content, media_url, user_id),
-        resolved_by, resolved_at, admin_note
+        reported_user:reported_user_id(id, username, avatar_url)
       `, { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
     if (status !== 'all') query = query.eq('status', status);
-    if (type !== 'all') query = query.eq('report_type', type);
 
     const { data, count, error } = await query;
     if (error) throw error;
@@ -286,18 +248,12 @@ router.get('/reports', adminAuth, async (req, res) => {
   }
 });
 
-// PATCH /api/admin/reports/:id — resolve report
 router.patch('/reports/:id', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, admin_note, action } = req.body;
+    const { status, admin_note } = req.body;
 
-    await supabase.from('reports').update({
-      status,
-      admin_note,
-      resolved_by: req.adminId,
-      resolved_at: new Date().toISOString(),
-    }).eq('id', id);
+    await supabase.from('reports').update({ status }).eq('id', id);
 
     res.json({ success: true });
   } catch (err) {
@@ -306,16 +262,13 @@ router.patch('/reports/:id', adminAuth, async (req, res) => {
 });
 
 // ─── SPARK CONTENT MODERATION ────────────────────────────────────────────────
-
-// GET /api/admin/spark/profiles — flagged Spark profiles
 router.get('/spark/profiles', adminAuth, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('spark_profiles')
       .select(`
-        id, bio, interests, photos, is_active, created_at,
-        user:user_id(id, username, avatar_url, strike_count),
-        flag_count
+        id, interests, mood, age_range, looking_for, is_active, created_at, flag_count,
+        user:user_id(id, username, avatar_url, strike_count)
       `)
       .order('flag_count', { ascending: false })
       .limit(50);
@@ -327,7 +280,6 @@ router.get('/spark/profiles', adminAuth, async (req, res) => {
   }
 });
 
-// PATCH /api/admin/spark/profiles/:id — approve/reject Spark profile
 router.patch('/spark/profiles/:id', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -349,19 +301,12 @@ router.patch('/spark/profiles/:id', adminAuth, async (req, res) => {
 });
 
 // ─── CONTENT MODERATION (Posts) ──────────────────────────────────────────────
-
-// GET /api/admin/posts/flagged
 router.get('/posts/flagged', adminAuth, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('posts')
-      .select(`
-        id, content, media_url, created_at, likes_count,
-        user:user_id(id, username, avatar_url),
-        report_count
-      `)
-      .gt('report_count', 0)
-      .order('report_count', { ascending: false })
+      .select(`id, content, media_url, created_at, user:user_id(id, username, avatar_url)`)
+      .order('created_at', { ascending: false })
       .limit(50);
 
     if (error) throw error;
@@ -371,24 +316,16 @@ router.get('/posts/flagged', adminAuth, async (req, res) => {
   }
 });
 
-// DELETE /api/admin/posts/:id
 router.delete('/posts/:id', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
-
     const { data: post } = await supabase.from('posts').select('user_id').eq('id', id).single();
-
     await supabase.from('admin_actions').insert({
-      admin_id: req.adminId,
-      target_user_id: post?.user_id,
-      action_type: 'delete_post',
-      reason,
-      metadata: { post_id: id },
+      admin_id: req.adminId, target_user_id: post?.user_id,
+      action_type: 'delete_post', reason, metadata: { post_id: id },
     });
-
     await supabase.from('posts').delete().eq('id', id);
-
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -396,8 +333,6 @@ router.delete('/posts/:id', adminAuth, async (req, res) => {
 });
 
 // ─── ADMIN ACTION LOG ────────────────────────────────────────────────────────
-
-// GET /api/admin/actions
 router.get('/actions', adminAuth, async (req, res) => {
   try {
     const { page = 1 } = req.query;
