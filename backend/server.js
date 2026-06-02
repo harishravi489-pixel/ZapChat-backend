@@ -1,9 +1,12 @@
 require('dotenv').config();
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+
+// ── Route imports ──────────────────────────────────────────────────────────
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const postRoutes = require('./routes/posts');
@@ -15,6 +18,8 @@ const sparkRoutes = require('./routes/spark');
 const bondRoutes = require('./routes/bond');
 const notificationRoutes = require('./routes/notifications');
 const adminRoutes = require('./routes/admin');
+const roomRoutes = require('./routes/rooms');           // ← NEW
+const subscriptionRoutes = require('./routes/subscriptions'); // ← NEW
 
 const app = express();
 app.set('trust proxy', 1);
@@ -28,8 +33,13 @@ app.use(cors({
   credentials: true,
 }));
 app.use(morgan('dev'));
+
+// ── IMPORTANT: Stripe webhook needs raw body BEFORE express.json ───────────
+app.use('/api/subscriptions/stripe/webhook', express.raw({ type: 'application/json' }));
+
 app.use(express.json({ limit: '10mb' }));
 
+// ── Rate limiters ──────────────────────────────────────────────────────────
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -48,6 +58,7 @@ app.use('/api/auth/send-phone-otp', authLimiter);
 app.use('/api/auth/verify-phone-otp', authLimiter);
 app.use('/api/auth/google', authLimiter);
 
+// ── Routes ─────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/posts', postRoutes);
@@ -59,13 +70,21 @@ app.use('/api/spark', sparkRoutes);
 app.use('/api/bond', bondRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/rooms', roomRoutes);                     // ← NEW
+app.use('/api/subscriptions', subscriptionRoutes);     // ← NEW
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// ── Error handler ──────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
 });
 
+// ── Create HTTP server + attach Socket.io ──────────────────────────────────
+const server = http.createServer(app);
+const initSocket = require('./socket');                // ← NEW
+initSocket(server);                                    // ← NEW
+
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`ZapChat backend running on port ${PORT}`));
+server.listen(PORT, () => console.log(`ZapChat backend running on port ${PORT}`));
